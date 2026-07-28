@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__.'/../src/ReservedActivation.php';
+require_once __DIR__.'/../src/RuntimeConfig.php';
 
 function expect(bool $condition, string $message): void
 {
@@ -12,6 +13,14 @@ function expect(bool $condition, string $message): void
 }
 
 $now = 1785211200;
+putenv('REGISTRY_DASH_CONFIG_PATH='.__DIR__.'/fixtures/config.php');
+$runtime = loadBridgeRuntimeConfig();
+expect($runtime->dsn === 'mysql:host=mysql.internal;dbname=registry;charset=utf8mb4', 'dashboard DSN');
+expect($runtime->databaseUser === 'registry_user', 'dashboard database user');
+expect($runtime->registryDatabase === 'registry', 'registry database');
+expect($runtime->pdnsDatabase === 'pdns', 'PowerDNS database');
+expect($runtime->expectedRegistrar === 'SkyInclude', 'dashboard registrar');
+
 $valid = normalizeActivationRequest([
     'zone' => 'ade97a05d3854ea2b37871a7431f7be2',
     'expiration' => strtotime('+9 years', $now),

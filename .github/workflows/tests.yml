@@ -10,6 +10,18 @@ permissions:
 jobs:
   php:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: bridge
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -17,5 +29,12 @@ jobs:
           php-version: "8.2"
       - run: php -l public/index.php
       - run: php -l src/ReservedActivation.php
+      - run: php -l src/RuntimeConfig.php
       - run: php -l tests/contract.php
+      - run: php -l tests/integration.php
       - run: php tests/contract.php
+      - run: php tests/integration.php
+        env:
+          MYSQL_DSN: mysql:host=127.0.0.1;port=3306;charset=utf8mb4
+          MYSQL_USER: root
+          MYSQL_PASSWORD: bridge

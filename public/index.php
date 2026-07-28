@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__.'/../src/ReservedActivation.php';
+require_once __DIR__.'/../src/RuntimeConfig.php';
 
 header('Content-Type: application/json');
 
@@ -20,40 +21,30 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || $path !== '/v1/reserved-activations
     respond(404, ['ok' => false, 'code' => 'not_found']);
 }
 
-$configuredToken = (string)getenv('BRIDGE_API_KEY');
-$authorization = (string)($_SERVER['HTTP_AUTHORIZATION'] ?? '');
-$providedToken = str_starts_with($authorization, 'Bearer ')
-    ? substr($authorization, 7)
-    : '';
-if (
-    strlen($configuredToken) < 32
-    || $providedToken === ''
-    || !hash_equals($configuredToken, $providedToken)
-) {
-    respond(401, ['ok' => false, 'code' => 'authentication_required']);
-}
-
 try {
-    $accountId = filter_var(getenv('SKYINCLUDE_ACCOUNT_ID'), FILTER_VALIDATE_INT);
-    if ($accountId === false || $accountId < 1) {
-        throw new RuntimeException('SKYINCLUDE_ACCOUNT_ID is not configured.');
-    }
-
     $input = json_decode(file_get_contents('php://input'), true, flags: JSON_THROW_ON_ERROR);
     if (!is_array($input)) {
         throw new JsonException('Request body must be a JSON object.');
     }
-    $request = normalizeActivationRequest($input, (int)$accountId);
 
+    $runtime = loadBridgeRuntimeConfig();
     $pdo = new PDO(
-        (string)getenv('MYSQL_DSN'),
-        (string)getenv('MYSQL_USER'),
-        (string)getenv('MYSQL_PASSWORD'),
+        $runtime->dsn,
+        $runtime->databaseUser,
+        $runtime->databasePassword,
         [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_EMULATE_PREPARES => false,
         ]
     );
+    $accountId = authenticateRegistryApiKey(
+        $pdo,
+        $runtime->registryDatabase,
+        (string)($_SERVER['HTTP_AUTHORIZATION'] ?? ''),
+        strtolower(trim((string)getenv('SKYINCLUDE_CUSTODY_EMAIL')))
+    );
+    $request = normalizeActivationRequest($input, $accountId);
+
     $allowedTlds = array_values(array_filter(array_map(
         static fn (string $tld): string => strtolower(trim($tld, " .\t\n\r\0\x0B")),
         explode(',', (string)getenv('ALLOWED_TLDS'))
@@ -64,15 +55,16 @@ try {
 
     $service = new ReservedActivationService(
         $pdo,
-        (string)getenv('REGISTRY_DB_NAME'),
-        (string)getenv('PDNS_DB_NAME'),
-        (int)$accountId,
+        $runtime->registryDatabase,
+        $runtime->pdnsDatabase,
+        $accountId,
         $allowedTlds,
-        (string)getenv('EXPECTED_REGISTRAR')
+        $runtime->expectedRegistrar
     );
     respond(200, ['ok' => true, 'data' => $service->activate($request)]);
 } catch (BridgeError $error) {
-    respond(409, ['ok' => false, 'code' => $error->errorCode, 'message' => $error->getMessage()]);
+    $status = $error->errorCode === 'authentication_required' ? 401 : 409;
+    respond($status, ['ok' => false, 'code' => $error->errorCode, 'message' => $error->getMessage()]);
 } catch (JsonException) {
     respond(400, ['ok' => false, 'code' => 'invalid_json']);
 } catch (Throwable) {
